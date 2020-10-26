@@ -26,6 +26,7 @@ import org.jmqtt.common.helper.MixAll;
 import org.jmqtt.common.helper.RejectHandler;
 import org.jmqtt.common.helper.ThreadFactoryImpl;
 import org.jmqtt.common.log.LoggerName;
+import org.jmqtt.manage.HttpServer;
 import org.jmqtt.remoting.netty.ChannelEventListener;
 import org.jmqtt.remoting.netty.NettyRemotingServer;
 import org.jmqtt.remoting.netty.RequestProcessor;
@@ -73,6 +74,7 @@ public class BrokerController {
     private ReSendMessageService reSendMessageService;
     private ClusterSessionManager clusterSessionManager;
     private ClusterMessageTransfer clusterMessageTransfer;
+    private HttpServer httpServer;
 
 
     public BrokerController(BrokerConfig brokerConfig, NettyConfig nettyConfig, StoreConfig storeConfig, ClusterConfig clusterConfig) {
@@ -95,7 +97,7 @@ public class BrokerController {
                 case 2:
                     this.abstractMqttStore = new RedisMqttStore(clusterConfig);
                     break;
-                default:
+                case 3:
                     this.abstractMqttStore = new DefaultMqttStore();
                     break;
             }
@@ -124,6 +126,7 @@ public class BrokerController {
 
         this.channelEventListener = new ClientLifeCycleHookService(willMessageStore, messageDispatcher);
         this.remotingServer = new NettyRemotingServer(brokerConfig, nettyConfig, channelEventListener);
+        this.httpServer = new HttpServer(nettyConfig);
         this.reSendMessageService = new ReSendMessageService(offlineMessageStore, flowMessageStore);
 
         int coreThreadNum = Runtime.getRuntime().availableProcessors();
@@ -160,18 +163,14 @@ public class BrokerController {
         {
             if (checkClusterMode()) {
                 // cluster
-                switch (storeConfig.getStoreType()) {
-                    case 1:
+                switch (clusterConfig.getClusterComponentName()) {
+                    case "local":
                         this.clusterSessionManager = new DefaultClusterSessionManager(sessionStore, subscriptionStore);
-                        this.clusterMessageTransfer = new DefaultClusterMessageTransfer(messageDispatcher);
+                        this.clusterMessageTransfer = new DefaultClusterMessageTransfer(messageDispatcher, clusterConfig);
                         break;
-                    case 2:
+                    case "redis":
                         this.clusterSessionManager = new RedisClusterSessionManager(sessionStore, subscriptionStore);
                         this.clusterMessageTransfer = new RedisClusterMessageTransfer(messageDispatcher, (RedisMqttStore) abstractMqttStore);
-                        break;
-                    default:
-                        this.clusterSessionManager = new DefaultClusterSessionManager(sessionStore, subscriptionStore);
-                        this.clusterMessageTransfer = new DefaultClusterMessageTransfer(messageDispatcher);
                         break;
                 }
             }
@@ -199,7 +198,8 @@ public class BrokerController {
         MixAll.printProperties(log, storeConfig);
         MixAll.printProperties(log, clusterConfig);
 
-        {//init and register mqtt remoting processor
+        {
+            //init and register mqtt remoting processor
             RequestProcessor connectProcessor = new ConnectProcessor(this);
             RequestProcessor disconnectProcessor = new DisconnectProcessor(this);
             RequestProcessor pingProcessor = new PingProcessor();
@@ -237,6 +237,9 @@ public class BrokerController {
         }
         if (this.clusterMessageTransfer != null) {
             this.clusterMessageTransfer.startup();
+        }
+        if (this.httpServer != null) {
+            this.httpServer.start();
         }
         log.info("JMqtt Server start success and version = {}", brokerConfig.getVersion());
     }
